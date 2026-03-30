@@ -1,22 +1,59 @@
 const Doctor = require("../models/Doctor");
+const asyncHandler = require("../middleware/asyncHandler");
 
-// Add Doctor
-exports.addDoctor = async (req, res) => {
-  try {
-    const doctor = new Doctor(req.body);
-    const savedDoctor = await doctor.save();
-    res.status(201).json(savedDoctor);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
+/* =========================================================
+   ADD DOCTOR
+========================================================= */
+exports.addDoctor = asyncHandler(async (req, res) => {
 
-// Get All Doctors
-exports.getDoctors = async (req, res) => {
-  try {
-    const doctors = await Doctor.find();
-    res.json(doctors);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  const {
+    name,
+    specialization,
+    gender,
+    startTime,
+    endTime,
+    workingDays
+  } = req.body;
+
+  if (!name || !specialization || !gender || !startTime || !endTime) {
+    return res.status(400).json({
+      success: false,
+      message: "All required fields must be provided"
+    });
   }
-};
+
+  const doctor = await Doctor.create({
+    name,
+    specialization,
+    gender,
+    startTime,
+    endTime,
+    workingDays,
+    profileImage: req.file
+      ? `/uploads/${req.file.filename}`
+      : ""
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Doctor added successfully",
+    data: doctor
+  });
+
+});
+
+
+/* =========================================================
+   GET ALL DOCTORS
+========================================================= */
+exports.getDoctors = asyncHandler(async (req, res) => {
+
+  const doctors = await Doctor.find().sort({ createdAt: -1 });
+
+  res.status(200).json({
+    success: true,
+    count: doctors.length,
+    data: doctors
+  });
+
+});

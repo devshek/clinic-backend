@@ -1,66 +1,69 @@
+const asyncHandler = require("../middleware/asyncHandler");
 const Appointment = require("../models/Appointment");
 
-// Dashboard Stats
-exports.getDashboardStats = async (req, res) => {
-  try {
-    const today = new Date().toISOString().split("T")[0];
+/* =========================================================
+   DASHBOARD STATS
+========================================================= */
+exports.getDashboardStats = asyncHandler(async (req, res) => {
 
-    // Total appointments
-    const totalAppointments = await Appointment.countDocuments();
+  const today = new Date().toISOString().split("T")[0];
 
-    // Today's appointments
-    const todayAppointments = await Appointment.countDocuments({
-      date: today,
-      status: "booked"
-    });
+  // Total appointments
+  const totalAppointments = await Appointment.countDocuments();
 
-    // Cancelled appointments
-    const cancelledAppointments = await Appointment.countDocuments({
-      status: "cancelled"
-    });
+  // Today's appointments (pending + confirmed)
+  const todayAppointments = await Appointment.countDocuments({
+    date: today,
+    status: { $in: ["pending", "confirmed"] }
+  });
 
-    // Doctor-wise booking count
-    const doctorStats = await Appointment.aggregate([
-  { $match: { status: "booked" } },
+  // Cancelled appointments
+  const cancelledAppointments = await Appointment.countDocuments({
+    status: "cancelled"
+  });
 
-  {
-    $group: {
-      _id: "$doctor",
-      totalBookings: { $sum: 1 }
-    }
-  },
+  // Doctor-wise booking stats
+  const doctorStats = await Appointment.aggregate([
+    {
+      $match: {
+        status: { $in: ["pending", "confirmed"] }
+      }
+    },
+    {
+      $group: {
+        _id: "$doctor",
+        totalBookings: { $sum: 1 }
+      }
+    },
+    {
+      $lookup: {
+        from: "doctors",
+        localField: "_id",
+        foreignField: "_id",
+        as: "doctorInfo"
+      }
+    },
+    { $unwind: "$doctorInfo" },
+    {
+      $project: {
+        doctorId: "$_id",
+        doctorName: "$doctorInfo.name",
+        specialization: "$doctorInfo.specialization",
+        totalBookings: 1,
+        _id: 0
+      }
+    },
+    { $sort: { totalBookings: -1 } }
+  ]);
 
-  {
-    $lookup: {
-      from: "doctors",
-      localField: "_id",
-      foreignField: "_id",
-      as: "doctorInfo"
-    }
-  },
-
-  { $unwind: "$doctorInfo" },
-
-  {
-    $project: {
-      doctorId: "$_id",
-      doctorName: "$doctorInfo.name",
-      specialization: "$doctorInfo.specialization",
-      totalBookings: 1,
-      _id: 0
-    }
-  }
-]);
-
-
-    res.json({
+  res.status(200).json({
+    success: true,
+    data: {
       totalAppointments,
       todayAppointments,
       cancelledAppointments,
       doctorStats
-    });
+    }
+  });
 
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
+});

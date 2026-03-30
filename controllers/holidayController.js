@@ -1,31 +1,54 @@
+const asyncHandler = require("../middleware/asyncHandler");
 const Holiday = require("../models/Holiday");
 
-// Add Holiday (Admin)
-exports.addHoliday = async (req, res) => {
-  try {
-    const { date, reason } = req.body;
+/* =========================================================
+   ADD HOLIDAY (ADMIN)
+========================================================= */
+exports.addHoliday = asyncHandler(async (req, res) => {
 
-    const exists = await Holiday.findOne({ date });
-    if (exists) {
-      return res.status(400).json({ message: "Holiday already exists" });
-    }
+  const { date, reason } = req.body;
 
-    const holiday = new Holiday({ date, reason });
-    await holiday.save();
-
-    res.status(201).json({ message: "Holiday added successfully" });
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  if (!date) {
+    return res.status(400).json({
+      success: false,
+      message: "Holiday date is required",
+    });
   }
-};
 
-// Get All Holidays
-exports.getHolidays = async (req, res) => {
-  try {
-    const holidays = await Holiday.find();
-    res.json(holidays);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+  const exists = await Holiday.findOne({ date });
+
+  if (exists) {
+    return res.status(400).json({
+      success: false,
+      message: "Holiday already exists",
+    });
   }
-};
+
+  const holiday = await Holiday.create({
+    date,
+    reason,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Holiday added successfully",
+    data: holiday,
+  });
+
+});
+
+
+/* =========================================================
+   GET ALL HOLIDAYS
+========================================================= */
+exports.getHolidays = asyncHandler(async (req, res) => {
+
+  const holidays = await Holiday.find().sort({ date: 1 });
+
+  res.status(200).json({
+    success: true,
+    count: holidays.length,
+    data: holidays,
+  });
+
+});

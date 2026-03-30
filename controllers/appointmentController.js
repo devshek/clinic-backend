@@ -1,207 +1,181 @@
+const { validationResult } = require("express-validator");
+const asyncHandler = require("../middleware/asyncHandler");
+
 const Appointment = require("../models/Appointment");
 const Doctor = require("../models/Doctor");
 const Holiday = require("../models/Holiday");
+const sendEmail = require("../utils/sendEmail");
 
+/* =========================================================
+   BOOK APPOINTMENT
+========================================================= */
+exports.bookAppointment = asyncHandler(async (req, res) => {
 
-// Book Appointment
-exports.bookAppointment = async (req, res) => {
-  try {
-    const { patientName, age, phone, doctor, date, timeSlot } = req.body;
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      errors: errors.array().map(err => ({
+        field: err.path,
+        message: err.msg
+      }))
+    });
+  }
 
-    // Prevent booking past dates
- const today = new Date();
- const selectedDate = new Date(date);
+  const { patientName, age, phone, email, doctor, date, timeSlot } = req.body;
 
- today.setHours(0,0,0,0);
- selectedDate.setHours(0,0,0,0);
+  // Prevent past booking
+  const today = new Date();
+  const selectedDate = new Date(date);
+  today.setHours(0,0,0,0);
+  selectedDate.setHours(0,0,0,0);
 
-if (selectedDate < today) {
-  return res.status(400).json({
-    message: "Cannot book appointment for past date"
+  if (selectedDate < today) {
+    res.status(400);
+    throw new Error("Cannot book appointment for past date");
+  }
+
+  // Prevent holiday booking
+  const holiday = await Holiday.findOne({ date });
+  if (holiday) {
+    res.status(400);
+    throw new Error("Clinic is closed on this date");
+  }
+
+  // Check doctor
+  const doctorExists = await Doctor.findById(doctor);
+  if (!doctorExists) {
+    res.status(404);
+    throw new Error("Doctor not found");
+  }
+
+  // Check working day
+  const selectedDay = new Date(date).toLocaleString("en-US", {
+    weekday: "long"
   });
-}
 
+  if (!doctorExists.workingDays.includes(selectedDay)) {
+    res.status(400);
+    throw new Error(`Doctor is not available on ${selectedDay}`);
+  }
 
-// Prevent booking on holiday
-const holiday = await Holiday.findOne({ date });
+  // Convert time helper
+  const convertToMinutes = (time) => {
+    const [timePart, modifier] = time.split(" ");
+    let [hours, minutes] = timePart.split(":").map(Number);
 
-if (holiday) {
-  return res.status(400).json({
-    message: "Clinic is closed on this date"
+    if (modifier === "PM" && hours !== 12) hours += 12;
+    if (modifier === "AM" && hours === 12) hours = 0;
+
+    return hours * 60 + minutes;
+  };
+
+  const appointmentTime = convertToMinutes(timeSlot);
+  const doctorStart = convertToMinutes(doctorExists.startTime);
+  const doctorEnd = convertToMinutes(doctorExists.endTime);
+
+  if (appointmentTime < doctorStart || appointmentTime >= doctorEnd) {
+    res.status(400);
+    throw new Error("Selected time is outside doctor's working hours");
+  }
+
+  // Prevent double booking
+  const existingAppointment = await Appointment.findOne({
+    doctor,
+    date,
+    timeSlot,
+    status: { $in: ["pending", "confirmed"] }
   });
-}
 
+  if (existingAppointment) {
+    res.status(400);
+    throw new Error("This time slot is already booked");
+  }
 
+  // Create appointment
+  const appointment = await Appointment.create({
+    patientName,
+    age,
+    phone,
+    email,
+    doctor,
+    date,
+    timeSlot
+  });
 
-    // Check if doctor exists
-    const doctorExists = await Doctor.findById(doctor);
+  /* ================= EMAIL SECTION ================= */
 
-    if (!doctorExists) {
-      return res.status(404).json({ message: "Doctor not found" });
-    }
+  // Email to patient
+  await sendEmail({
+    to: email,
+    subject: "Appointment Confirmed - City Clinic",
+    title: "Appointment Confirmation ✅",
+    message: `Dear ${patientName}, your appointment has been successfully booked.`,
+    details: `
+      <li><strong>Doctor:</strong> ${doctorExists.name}</li>
+      <li><strong>Date:</strong> ${date}</li>
+      <li><strong>Time:</strong> ${timeSlot}</li>
+    `
+  });
 
-    // Validate doctor working days
-const selectedDay = new Date(date).toLocaleString("en-US", {
-  weekday: "long"
+  // Email to admin
+  await sendEmail({
+    to: process.env.EMAIL_USER,
+    subject: "New Appointment Booked",
+    title: "New Appointment Alert 📅",
+    message: `A new appointment has been booked.`,
+    details: `
+      <li><strong>Patient:</strong> ${patientName}</li>
+      <li><strong>Doctor:</strong> ${doctorExists.name}</li>
+      <li><strong>Date:</strong> ${date}</li>
+      <li><strong>Time:</strong> ${timeSlot}</li>
+    `
+  });
+
+  res.status(201).json({
+    success: true,
+    message: "Appointment booked successfully",
+    data: appointment
+  });
+
 });
 
-if (!doctorExists.workingDays.includes(selectedDay)) {
-  return res.status(400).json({
-    message: `Doctor is not available on ${selectedDay}`
+
+/* =========================================================
+   UPDATE STATUS
+========================================================= */
+exports.updateAppointmentStatus = asyncHandler(async (req, res) => {
+
+  const { status } = req.body;
+
+  const appointment = await Appointment.findById(req.params.id).populate("doctor");
+
+  if (!appointment) {
+    res.status(404);
+    throw new Error("Appointment not found");
+  }
+
+  appointment.status = status;
+  await appointment.save();
+
+  // If cancelled → send email
+  if (status === "cancelled") {
+    await sendEmail({
+      to: appointment.email,
+      subject: "Appointment Cancelled - City Clinic",
+      title: "Appointment Cancelled ❌",
+      message: `Dear ${appointment.patientName}, your appointment has been cancelled.`,
+      details: `
+        <li><strong>Doctor:</strong> ${appointment.doctor.name}</li>
+        <li><strong>Date:</strong> ${appointment.date}</li>
+        <li><strong>Time:</strong> ${appointment.timeSlot}</li>
+      `
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Status updated successfully"
   });
-}
 
-
-    // Convert time string (e.g., "09:30 AM") to minutes
-const convertToMinutes = (time) => {
-  const [timePart, modifier] = time.split(" ");
-  let [hours, minutes] = timePart.split(":").map(Number);
-
-  if (modifier === "PM" && hours !== 12) {
-    hours += 12;
-  }
-  if (modifier === "AM" && hours === 12) {
-    hours = 0;
-  }
-
-  return hours * 60 + minutes;
-};
-
-const appointmentTime = convertToMinutes(timeSlot);
-const doctorStart = convertToMinutes(doctorExists.startTime);
-const doctorEnd = convertToMinutes(doctorExists.endTime);
-
-if (appointmentTime < doctorStart || appointmentTime > doctorEnd) {
-  return res.status(400).json({
-    message: "Selected time is outside doctor's working hours"
-  });
-}
-
-
-    // Check for double booking
-    const existingAppointment = await Appointment.findOne({
-      doctor,
-      date,
-      timeSlot,
-      status: "booked"
-    });
-
-    if (existingAppointment) {
-      return res.status(400).json({
-        message: "This time slot is already booked"
-      });
-    }
-
-    // Create new appointment
-    const appointment = new Appointment({
-      patientName,
-      age,
-      phone,
-      doctor,
-      date,
-      timeSlot
-    });
-
-    const savedAppointment = await appointment.save();
-
-    res.status(201).json({
-      message: "Appointment booked successfully",
-      appointment: savedAppointment
-    });
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// Get All Appointments
-exports.getAppointments = async (req, res) => {
-  try {
-    const appointments = await Appointment.find()
-      .populate("doctor", "name specialization");
-
-    res.json(appointments);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-// Cancel Appointment
-exports.cancelAppointment = async (req, res) => {
-  try {
-    const appointment = await Appointment.findById(req.params.id);
-
-    if (!appointment) {
-      return res.status(404).json({ message: "Appointment not found" });
-    }
-
-    appointment.status = "cancelled";
-    await appointment.save();
-
-    res.json({ message: "Appointment cancelled successfully" });
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-
-// Get Available Slots
-exports.getAvailableSlots = async (req, res) => {
-  try {
-    const { doctorId, date } = req.query;
-
-    const doctor = await Doctor.findById(doctorId);
-    if (!doctor) {
-      return res.status(404).json({ message: "Doctor not found" });
-    }
-
-    const convertToMinutes = (time) => {
-      const [timePart, modifier] = time.split(" ");
-      let [hours, minutes] = timePart.split(":").map(Number);
-
-      if (modifier === "PM" && hours !== 12) hours += 12;
-      if (modifier === "AM" && hours === 12) hours = 0;
-
-      return hours * 60 + minutes;
-    };
-
-    const convertToTimeString = (minutes) => {
-      let hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-
-      const modifier = hours >= 12 ? "PM" : "AM";
-      hours = hours % 12 || 12;
-
-      return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")} ${modifier}`;
-    };
-
-    const start = convertToMinutes(doctor.startTime);
-    const end = convertToMinutes(doctor.endTime);
-
-    const allSlots = [];
-
-    // 30-minute slot interval
-    for (let time = start; time < end; time += 30) {
-      allSlots.push(convertToTimeString(time));
-    }
-
-    // Get booked appointments for that doctor & date
-    const bookedAppointments = await Appointment.find({
-      doctor: doctorId,
-      date,
-      status: "booked"
-    });
-
-    const bookedSlots = bookedAppointments.map(a => a.timeSlot);
-
-    // Remove booked slots
-    const availableSlots = allSlots.filter(
-      slot => !bookedSlots.includes(slot)
-    );
-
-    res.json({ availableSlots });
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
+});

@@ -1,25 +1,35 @@
 const express = require("express");
 const router = express.Router();
+const { body } = require("express-validator");
+
 const {
   bookAppointment,
-  getAppointments,
-  cancelAppointment,
-  getAvailableSlots
+  updateAppointmentStatus
 } = require("../controllers/appointmentController");
-
 
 const protect = require("../middleware/authMiddleware");
 
-// Public
-router.post("/", bookAppointment);
+// Public - Book appointment
+router.post(
+  "/",
+  [
+    body("patientName").notEmpty().withMessage("Name is required"),
+    body("age")
+      .notEmpty().withMessage("Age is required")
+      .isNumeric().withMessage("Age must be a number"),
+    body("phone")
+      .notEmpty().withMessage("Phone number is required")
+      .isNumeric().withMessage("Phone number must be numeric"),
+    body("email")
+      .notEmpty().withMessage("Email is required")
+      .isEmail().withMessage("Enter valid email"),
+    body("date").notEmpty().withMessage("Date is required"),
+    body("timeSlot").notEmpty().withMessage("Time slot is required"),
+  ],
+  bookAppointment
+);
 
-// Admin Only
-router.get("/", protect, getAppointments);
-
-// Admin Only
-router.put("/:id/cancel", protect, cancelAppointment);
-
-router.get("/available-slots", getAvailableSlots);
-
+// Admin - Update status
+router.put("/:id/status", protect, updateAppointmentStatus);
 
 module.exports = router;

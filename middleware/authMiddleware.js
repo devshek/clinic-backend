@@ -1,28 +1,47 @@
 const jwt = require("jsonwebtoken");
+const asyncHandler = require("./asyncHandler");
 const Admin = require("../models/Admin");
 
-const protect = async (req, res, next) => {
-  let token;
+/* =========================================================
+   AUTH PROTECT MIDDLEWARE
+========================================================= */
 
-  if (req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer")) {
+const protect = asyncHandler(async (req, res, next) => {
 
-    try {
-      token = req.headers.authorization.split(" ")[1];
+  const authHeader = req.headers.authorization;
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      req.admin = await Admin.findById(decoded.id).select("-password");
-
-      next();
-
-    } catch (error) {
-      return res.status(401).json({ message: "Not authorized" });
-    }
-
-  } else {
-    return res.status(401).json({ message: "No token provided" });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({
+      success: false,
+      message: "No token provided",
+    });
   }
-};
+
+  const token = authHeader.split(" ")[1];
+
+  let decoded;
+
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (error) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired token",
+    });
+  }
+
+  const admin = await Admin.findById(decoded.id).select("-password");
+
+  if (!admin) {
+    return res.status(401).json({
+      success: false,
+      message: "Admin not found",
+    });
+  }
+
+  req.admin = admin;
+  next();
+
+});
 
 module.exports = protect;

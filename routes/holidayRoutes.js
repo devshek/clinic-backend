@@ -1,14 +1,35 @@
 const express = require("express");
 const router = express.Router();
-const protect = require("../middleware/authMiddleware");
+const { body } = require("express-validator");
 
+const protect = require("../middleware/authMiddleware");
 const {
   addHoliday,
-  getHolidays
+  getHolidays,
 } = require("../controllers/holidayController");
 
-// Admin only
-router.post("/", protect, addHoliday);
+/* =========================================================
+   HOLIDAY ROUTES (ADMIN ONLY)
+========================================================= */
+
+// Add Holiday
+router.post(
+  "/",
+  protect,
+  [
+    body("date")
+      .notEmpty()
+      .withMessage("Holiday date is required"),
+
+    body("reason")
+      .optional()
+      .isLength({ min: 3 })
+      .withMessage("Reason must be at least 3 characters"),
+  ],
+  addHoliday
+);
+
+// Get All Holidays
 router.get("/", protect, getHolidays);
 
 module.exports = router;
